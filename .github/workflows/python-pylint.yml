@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, aws-s3-helper-list-download-upload]
     strategy:
       matrix:
         python-version: ["3.10"]
