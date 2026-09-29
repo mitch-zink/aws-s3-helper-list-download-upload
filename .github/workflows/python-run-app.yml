@@ -9,7 +9,7 @@ on:
 jobs:
   build:
 
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, aws-s3-helper-list-download-upload]
 
     steps:
     - uses: actions/checkout@v2
