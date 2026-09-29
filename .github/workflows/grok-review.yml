@@ -1,0 +1,58 @@
+name: grok-review
+on: pull_request
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: grok-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Fork PRs get no secrets, and must never reach a home runner.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    # The repo's own LXC 103 runner (labelled with the repo name; labels ignore case).
+    runs-on: [self-hosted, linux, "${{ github.event.repository.name }}"]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install grok
+        env:
+          # A HOME per job: runners share /home/runner, and grok keeps sessions under ~/.grok.
+          HOME: ${{ runner.temp }}/grok-home
+        run: |
+          gh --version >/dev/null || { echo "::error::gh is not installed on runner $RUNNER_NAME"; exit 1; }
+          curl -fsSL https://x.ai/cli/install.sh | bash
+          echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
+      - name: Review
+        env:
+          HOME: ${{ runner.temp }}/grok-home
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          # Passed as env, not inlined, so a branch name can't inject shell.
+          PR: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          grok --version
+          # grok gets the diff and no tools: one reasoning pass, no shell, no repo exploring (which ran 10+ min).
+          { echo "Review PR #$PR in $GITHUB_REPOSITORY ($HEAD_REF into $BASE_REF) for bugs."
+            echo "You have no tools: review the diff below (10 lines of context) on its own."
+            echo "Reply with the review only: each real bug with file:line and a fix, or say plainly that there are none."
+            echo "Don't call a version, tag or model name nonexistent; you can't check what has been released."
+            echo '```diff'; git diff -U10 "$BASE_SHA...$HEAD_SHA" | head -c 200000; echo '```'; } > "$RUNNER_TEMP/prompt.md"
+          # grok-4.20-0309-reasoning caught a planted off-by-one in ~30 s; the default non-reasoning model missed it.
+          grok --no-auto-update --disable-web-search -m grok-4.20-0309-reasoning --tools "" --no-subagents --max-turns 3 \
+            --prompt-file "$RUNNER_TEMP/prompt.md" > "$RUNNER_TEMP/review.md"
+          grep -q "[^[:space:]]" "$RUNNER_TEMP/review.md" || { echo "::error::grok returned an empty review"; exit 1; }
+      # Posted here rather than by grok, which sometimes decides not to post.
+      - name: Post the review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr review "$PR" --comment --body-file "$RUNNER_TEMP/review.md"
